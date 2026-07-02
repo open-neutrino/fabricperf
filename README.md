@@ -112,6 +112,18 @@ behavior is selected with `FABRICPERF_MODE`.
 
 Please cite our work if you use FabricPerf:
 
-```
-Songlin Huang and Chenshu Wu. 2026. FabricPerf: Measuring NIC-less Scale-Up Network through GPU Communication Kernel Profiling. In ACM SIGCOMM 2026 Conference (SIGCOMM ’26), August 17–21, 2026, Denver, CO, USA. ACM, New York, NY, USA, 15 pages. https://doi.org/10.1145/3789240. 3829172
+```bibtex
+@inproceedings{huang2026fabricperf,
+  author = {Huang, Songlin and Wu, Chenshu},
+  title = {FabricPerf: Measuring NIC-less Scale-Up Network through GPU Communication Kernel Profiling},
+  booktitle = {Proceedings of the ACM SIGCOMM 2026 Conference},
+  series = {SIGCOMM '26},
+  year = {2026},
+  location = {Denver, CO, USA},
+  publisher = {ACM},
+  address = {New York, NY, USA},
+  numpages = {15},
+  doi = {10.1145/3789240.3829172},
+  url = {https://doi.org/10.1145/3789240.3829172},
+}
 ```
