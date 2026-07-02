@@ -1,0 +1,622 @@
+regs = 0
+
+[probe.ptp_metrics]
+level = "thread"
+pos = "kernel"
+before = """
+{
+    .reg .pred %ptp_p<32>;
+    .reg .b32  %ptp_r<40>;
+    .reg .b64  %ptp_rd<160>;
+
+    ld.const.u32 %ptp_r1, [numDevices];
+    // OLD: setp.ne.s32 %ptp_p2, %ptp_r1, 2;
+    // OLD: @%ptp_p2 bra $L__ptp_done;
+    // Step: calibrate only supported 2..8 rank launches; other scales keep zero offsets.
+    setp.lt.u32 %ptp_p2, %ptp_r1, 2;
+    @%ptp_p2 bra $L__ptp_done_exit;
+    setp.gt.u32 %ptp_p2, %ptp_r1, 8;
+    @%ptp_p2 bra $L__ptp_done_exit;
+
+    ld.const.u64 %ptp_rd29, [globalLeaderBuff];
+    cvta.to.global.u64 %ptp_rd1, %ptp_rd29;
+    ld.const.u64 %ptp_rd30, [globalFollowerBuff];
+    cvta.to.global.u64 %ptp_rd31, %ptp_rd30;
+
+    mov.u32 %ptp_r2, %ctaid.x;
+    mov.u32 %ptp_r3, %tid.x;
+    or.b32 %ptp_r4, %ptp_r2, %ptp_r3;
+    ld.const.u32 %ptp_r5, [deviceId];
+    mul.wide.s32 %ptp_rd32, %ptp_r5, 8;
+    add.s64 %ptp_rd2, %ptp_rd1, %ptp_rd32;
+    mul.wide.s32 %ptp_rd33, %ptp_r2, 8;
+    add.s64 %ptp_rd3, %ptp_rd31, %ptp_rd33;
+    ld.const.u32 %ptp_r16, [hostId];
+    mul.wide.s32 %ptp_rd34, %ptp_r16, 65536;
+    cvt.u64.u32 %ptp_rd35, %ptp_r5;
+    shl.b64 %ptp_rd36, %ptp_rd35, 32;
+    cvt.u64.u32 %ptp_rd37, %ptp_r2;
+    shl.b64 %ptp_rd38, %ptp_rd37, 48;
+    or.b64 %ptp_rd39, %ptp_rd38, %ptp_rd34;
+    or.b64 %ptp_rd40, %ptp_rd39, %ptp_rd36;
+    or.b64 %ptp_rd4, %ptp_rd40, 80;
+    add.s64 %ptp_rd5, %ptp_rd31, %ptp_rd32;
+    or.b64 %ptp_rd6, %ptp_rd40, 16;
+    or.b64 %ptp_rd7, %ptp_rd40, 368;
+    or.b64 %ptp_rd8, %ptp_rd40, 96;
+    or.b64 %ptp_rd9, %ptp_rd40, 896;
+    or.b64 %ptp_rd10, %ptp_rd40, 32;
+    ld.const.u64 %ptp_rd75, [globalResultBuff];
+    cvta.to.global.u64 %ptp_rd75, %ptp_rd75;
+    // OLD: mov.u64 %ptp_rd74, %ptp_rd75;
+    // Step: publish per-source clock offsets for receive-side timestamp correction.
+    ld.const.u64 %ptp_rd150, [globalLatencyOffsetBuff];
+    cvta.to.global.u64 %ptp_rd150, %ptp_rd150;
+    // OLD: ld.param.u64 %ptp_rd76, [param_ptp_metrics];
+    // OLD: cvta.to.global.u64 %ptp_rd76, %ptp_rd76;
+    // Step: load the Neutrino-generated map pointer used by normal kernels.
+    ld.global.u64 %ptp_rd76, [__neutrino_map_ptr_0];
+
+    mov.u32 %ptp_r17, %nctaid.x;
+    add.s32 %ptp_r7, %ptp_r17, -1;
+    mov.u32 %ptp_r30, 0;
+    // OLD: mul.lo.s32 %ptp_r9, %ptp_r30, 20;
+    // OLD: mul.wide.s32 %ptp_rd42, %ptp_r30, 8;
+    // OLD: add.s64 %ptp_rd12, %ptp_rd1, %ptp_rd42;
+    // OLD: mov.u32 %ptp_r31, 0;
+
+$L__ptp_leader_loop:
+    // Step: only rank 0 is the PTP leader; followers use CTA 0.
+    mul.lo.s32 %ptp_r9, %ptp_r30, 20;
+    mul.wide.s32 %ptp_rd42, %ptp_r30, 8;
+    add.s64 %ptp_rd12, %ptp_rd1, %ptp_rd42;
+    mov.u32 %ptp_r31, 0;
+
+$L__ptp_sample_loop:
+    add.s32 %ptp_r11, %ptp_r31, %ptp_r9;
+    setp.eq.s32 %ptp_p7, %ptp_r5, %ptp_r30;
+    @%ptp_p7 bra $L__ptp_leader_path;
+    bra.uni $L__ptp_follower_path;
+
+$L__ptp_leader_path:
+    setp.ne.s32 %ptp_p3, %ptp_r2, %ptp_r30;
+    setp.eq.s32 %ptp_p4, %ptp_r3, 0;
+    and.pred %ptp_p5, %ptp_p4, %ptp_p3;
+    setp.lt.u32 %ptp_p6, %ptp_r2, %ptp_r1;
+    and.pred %ptp_p1, %ptp_p5, %ptp_p6;
+    not.pred %ptp_p13, %ptp_p1;
+    @%ptp_p13 bra $L__ptp_sync_local;
+
+    ld.global.u64 %ptp_rd106, [%ptp_rd2];
+    mad.lo.s32 %ptp_r23, %ptp_r1, %ptp_r11, %ptp_r2;
+    mul.lo.s32 %ptp_r24, %ptp_r23, 3;
+    mul.wide.s32 %ptp_rd107, %ptp_r24, 16;
+    add.s64 %ptp_rd25, %ptp_rd106, %ptp_rd107;
+    mul.lo.s32 %ptp_r25, %ptp_r11, 5;
+    ld.global.u64 %ptp_rd108, [%ptp_rd3];
+    mul.wide.s32 %ptp_rd109, %ptp_r25, 16;
+    add.s64 %ptp_rd105, %ptp_rd108, %ptp_rd109;
+
+    mov.u64 %ptp_rd102, %globaltimer;
+    st.global.volatile.v2.u64 [%ptp_rd105], { %ptp_rd4, %ptp_rd102 };
+    fence.sc.sys;
+
+    mov.u32 %ptp_r6, 0;
+$L__ptp_wait_connresp:
+    ld.global.volatile.v2.u64 { %ptp_rd110, %ptp_rd111 }, [%ptp_rd25];
+    and.b64 %ptp_rd113, %ptp_rd110, 240;
+    // OLD: setp.ne.s64 %ptp_p14, %ptp_rd113, 96;
+    // OLD: @%ptp_p14 bra $L__ptp_wait_connresp;
+    setp.eq.s64 %ptp_p14, %ptp_rd113, 96;
+    @%ptp_p14 bra $L__ptp_have_connresp;
+    add.u32 %ptp_r6, %ptp_r6, 1;
+    setp.lt.u32 %ptp_p22, %ptp_r6, 1048576;
+    @%ptp_p22 bra $L__ptp_wait_connresp;
+    bra.uni $L__ptp_sync_local;
+$L__ptp_have_connresp:
+
+    mov.u64 %ptp_rd114, %globaltimer;
+    mov.u64 %ptp_rd115, %globaltimer;
+    add.s64 %ptp_rd118, %ptp_rd105, 16;
+    st.global.volatile.v2.u64 [%ptp_rd118], { %ptp_rd6, %ptp_rd115 };
+    fence.sc.gpu;
+
+    mov.u64 %ptp_rd119, %globaltimer;
+    fence.sc.sys;
+    add.s64 %ptp_rd122, %ptp_rd105, 32;
+    st.global.volatile.v2.u64 [%ptp_rd122], { %ptp_rd7, %ptp_rd119 };
+    fence.sc.gpu;
+
+    add.s64 %ptp_rd27, %ptp_rd25, 16;
+    mov.u32 %ptp_r6, 0;
+$L__ptp_wait_delayreq:
+    ld.global.volatile.v2.u64 { %ptp_rd123, %ptp_rd124 }, [%ptp_rd27];
+    mov.u64 %ptp_rd126, %globaltimer;
+    and.b64 %ptp_rd127, %ptp_rd123, 240;
+    // OLD: setp.ne.s64 %ptp_p15, %ptp_rd127, 32;
+    // OLD: @%ptp_p15 bra $L__ptp_wait_delayreq;
+    setp.eq.s64 %ptp_p15, %ptp_rd127, 32;
+    @%ptp_p15 bra $L__ptp_have_delayreq;
+    add.u32 %ptp_r6, %ptp_r6, 1;
+    setp.lt.u32 %ptp_p22, %ptp_r6, 1048576;
+    @%ptp_p22 bra $L__ptp_wait_delayreq;
+    bra.uni $L__ptp_sync_local;
+$L__ptp_have_delayreq:
+
+    add.s64 %ptp_rd130, %ptp_rd105, 48;
+    st.global.volatile.v2.u64 [%ptp_rd130], { %ptp_rd9, %ptp_rd126 };
+    fence.sc.sys;
+
+    add.s64 %ptp_rd142, %ptp_rd25, 32;
+    mov.u32 %ptp_r6, 0;
+$L__ptp_wait_report:
+    ld.global.volatile.v2.u64 { %ptp_rd143, %ptp_rd144 }, [%ptp_rd142];
+    and.b64 %ptp_rd145, %ptp_rd143, 240;
+    // OLD: setp.ne.s64 %ptp_p21, %ptp_rd145, 48;
+    // OLD: @%ptp_p21 bra $L__ptp_wait_report;
+    setp.eq.s64 %ptp_p21, %ptp_rd145, 48;
+    @%ptp_p21 bra $L__ptp_have_report;
+    add.u32 %ptp_r6, %ptp_r6, 1;
+    setp.lt.u32 %ptp_p22, %ptp_r6, 1048576;
+    @%ptp_p22 bra $L__ptp_wait_report;
+    bra.uni $L__ptp_sync_local;
+$L__ptp_have_report:
+
+    shr.u64 %ptp_rd148, %ptp_rd143, 8;
+    mov.u64 %ptp_rd147, 0;
+    sub.s64 %ptp_rd147, %ptp_rd147, %ptp_rd144;
+    // Step: leader receives leader->follower offset and stores the signed inverse for srcPeer=follower.
+    mul.wide.s32 %ptp_rd151, %ptp_r2, 8;
+    add.s64 %ptp_rd152, %ptp_rd150, %ptp_rd151;
+    st.global.u64 [%ptp_rd152], %ptp_rd147;
+    fence.sc.gpu;
+    // OLD: st.global.v2.u64 [%ptp_rd74], { %ptp_rd147, %ptp_rd148 };
+    // OLD: add.s64 %ptp_rd74, %ptp_rd74, 16;
+    // Step: compact diagnostic slot = (srcPeer * 7 + localPeerWithoutSrc) * 20 + sample.
+    setp.lt.u32 %ptp_p23, %ptp_r5, %ptp_r2;
+    mov.u32 %ptp_r32, %ptp_r5;
+    not.pred %ptp_p24, %ptp_p23;
+    @%ptp_p24 sub.u32 %ptp_r32, %ptp_r32, 1;
+    mul.lo.s32 %ptp_r33, %ptp_r2, 7;
+    add.u32 %ptp_r33, %ptp_r33, %ptp_r32;
+    mul.lo.s32 %ptp_r33, %ptp_r33, 20;
+    add.u32 %ptp_r33, %ptp_r33, %ptp_r31;
+    mul.wide.s32 %ptp_rd153, %ptp_r33, 16;
+    add.s64 %ptp_rd154, %ptp_rd75, %ptp_rd153;
+    st.global.v2.u64 [%ptp_rd154], { %ptp_rd147, %ptp_rd148 };
+
+    mov.u64 %ptp_rd138, 0;
+    st.global.volatile.v2.u64 [%ptp_rd25], { %ptp_rd138, %ptp_rd138 };
+    st.global.volatile.v2.u64 [%ptp_rd27], { %ptp_rd138, %ptp_rd138 };
+    st.global.volatile.v2.u64 [%ptp_rd142], { %ptp_rd138, %ptp_rd138 };
+    bra.uni $L__ptp_sync_local;
+
+$L__ptp_follower_path:
+    setp.ne.s32 %ptp_p8, %ptp_r4, 0;
+    @%ptp_p8 bra $L__ptp_sync_local;
+
+    ld.global.u64 %ptp_rd43, [%ptp_rd12];
+    mad.lo.s32 %ptp_r19, %ptp_r1, %ptp_r11, %ptp_r5;
+    mul.lo.s32 %ptp_r20, %ptp_r19, 3;
+    mul.wide.s32 %ptp_rd44, %ptp_r20, 16;
+    add.s64 %ptp_rd13, %ptp_rd43, %ptp_rd44;
+    mul.lo.s32 %ptp_r21, %ptp_r11, 5;
+    ld.global.u64 %ptp_rd45, [%ptp_rd5];
+    mul.wide.s32 %ptp_rd46, %ptp_r21, 16;
+    add.s64 %ptp_rd14, %ptp_rd45, %ptp_rd46;
+
+    mov.u32 %ptp_r6, 0;
+$L__ptp_wait_connreq:
+    ld.global.volatile.v2.u64 { %ptp_rd47, %ptp_rd48 }, [%ptp_rd14];
+    and.b64 %ptp_rd50, %ptp_rd47, 240;
+    // OLD: setp.ne.s64 %ptp_p9, %ptp_rd50, 80;
+    // OLD: @%ptp_p9 bra $L__ptp_wait_connreq;
+    setp.eq.s64 %ptp_p9, %ptp_rd50, 80;
+    @%ptp_p9 bra $L__ptp_have_connreq;
+    add.u32 %ptp_r6, %ptp_r6, 1;
+    setp.lt.u32 %ptp_p22, %ptp_r6, 1048576;
+    @%ptp_p22 bra $L__ptp_wait_connreq;
+    bra.uni $L__ptp_sync_local;
+$L__ptp_have_connreq:
+
+    mov.u64 %ptp_rd51, %globaltimer;
+    st.global.volatile.v2.u64 [%ptp_rd13], { %ptp_rd8, %ptp_rd51 };
+    fence.sc.sys;
+
+    mov.u64 %ptp_rd55, %globaltimer;
+    add.s64 %ptp_rd15, %ptp_rd14, 16;
+    mov.u32 %ptp_r6, 0;
+$L__ptp_wait_sync:
+    ld.global.volatile.v2.u64 { %ptp_rd56, %ptp_rd57 }, [%ptp_rd15];
+    mov.u64 %ptp_rd59, %globaltimer;
+    and.b64 %ptp_rd60, %ptp_rd56, 240;
+    // OLD: setp.ne.s64 %ptp_p10, %ptp_rd60, 16;
+    // OLD: @%ptp_p10 bra $L__ptp_wait_sync;
+    setp.eq.s64 %ptp_p10, %ptp_rd60, 16;
+    @%ptp_p10 bra $L__ptp_have_sync;
+    add.u32 %ptp_r6, %ptp_r6, 1;
+    setp.lt.u32 %ptp_p22, %ptp_r6, 1048576;
+    @%ptp_p22 bra $L__ptp_wait_sync;
+    bra.uni $L__ptp_sync_local;
+$L__ptp_have_sync:
+
+    add.s64 %ptp_rd17, %ptp_rd14, 32;
+    mov.u32 %ptp_r6, 0;
+$L__ptp_wait_followup:
+    ld.global.volatile.v2.u64 { %ptp_rd61, %ptp_rd62 }, [%ptp_rd17];
+    and.b64 %ptp_rd64, %ptp_rd61, 240;
+    // OLD: setp.ne.s64 %ptp_p11, %ptp_rd64, 112;
+    // OLD: @%ptp_p11 bra $L__ptp_wait_followup;
+    setp.eq.s64 %ptp_p11, %ptp_rd64, 112;
+    @%ptp_p11 bra $L__ptp_have_followup;
+    add.u32 %ptp_r6, %ptp_r6, 1;
+    setp.lt.u32 %ptp_p22, %ptp_r6, 1048576;
+    @%ptp_p22 bra $L__ptp_wait_followup;
+    bra.uni $L__ptp_sync_local;
+$L__ptp_have_followup:
+
+    mov.u64 %ptp_rd65, %globaltimer;
+    add.s64 %ptp_rd68, %ptp_rd13, 16;
+    st.global.volatile.v2.u64 [%ptp_rd68], { %ptp_rd10, %ptp_rd65 };
+    fence.sc.gpu;
+
+    mov.u64 %ptp_rd69, %globaltimer;
+    fence.sc.sys;
+    add.s64 %ptp_rd22, %ptp_rd14, 48;
+    mov.u32 %ptp_r6, 0;
+$L__ptp_wait_delayresp:
+    ld.global.volatile.v2.u64 { %ptp_rd70, %ptp_rd71 }, [%ptp_rd22];
+    and.b64 %ptp_rd73, %ptp_rd70, 240;
+    // OLD: setp.ne.s64 %ptp_p12, %ptp_rd73, 128;
+    // OLD: @%ptp_p12 bra $L__ptp_wait_delayresp;
+    setp.eq.s64 %ptp_p12, %ptp_rd73, 128;
+    @%ptp_p12 bra $L__ptp_have_delayresp;
+    add.u32 %ptp_r6, %ptp_r6, 1;
+    setp.lt.u32 %ptp_p22, %ptp_r6, 1048576;
+    @%ptp_p22 bra $L__ptp_wait_delayresp;
+    bra.uni $L__ptp_sync_local;
+$L__ptp_have_delayresp:
+
+    sub.s64 %ptp_rd89, %ptp_rd71, %ptp_rd69;
+    sub.s64 %ptp_rd90, %ptp_rd59, %ptp_rd62;
+    sub.s64 %ptp_rd91, %ptp_rd90, %ptp_rd89;
+    shr.u64 %ptp_rd92, %ptp_rd91, 63;
+    add.s64 %ptp_rd93, %ptp_rd91, %ptp_rd92;
+    add.s64 %ptp_rd94, %ptp_rd89, %ptp_rd90;
+    shr.u64 %ptp_rd95, %ptp_rd94, 63;
+    add.s64 %ptp_rd96, %ptp_rd94, %ptp_rd95;
+    shr.s64 %ptp_rd98, %ptp_rd93, 1;
+    shr.s64 %ptp_rd97, %ptp_rd96, 1;
+
+    add.s64 %ptp_rd99, %ptp_rd13, 32;
+    shl.b64 %ptp_rd149, %ptp_rd97, 8;
+    or.b64 %ptp_rd149, %ptp_rd149, 48;
+    st.global.volatile.v2.u64 [%ptp_rd99], { %ptp_rd149, %ptp_rd98 };
+    fence.sc.sys;
+
+    // Step: follower stores the direct leader->local offset for srcPeer=leaderRank.
+    mul.wide.s32 %ptp_rd151, %ptp_r30, 8;
+    add.s64 %ptp_rd152, %ptp_rd150, %ptp_rd151;
+    st.global.u64 [%ptp_rd152], %ptp_rd98;
+    fence.sc.gpu;
+    // OLD: st.global.v2.u64 [%ptp_rd74], { %ptp_rd98, %ptp_rd97 };
+    // OLD: add.s64 %ptp_rd74, %ptp_rd74, 16;
+    // Step: save the completed direct pair in the same compact diagnostic layout.
+    setp.lt.u32 %ptp_p23, %ptp_r5, %ptp_r30;
+    mov.u32 %ptp_r32, %ptp_r5;
+    not.pred %ptp_p24, %ptp_p23;
+    @%ptp_p24 sub.u32 %ptp_r32, %ptp_r32, 1;
+    mul.lo.s32 %ptp_r33, %ptp_r30, 7;
+    add.u32 %ptp_r33, %ptp_r33, %ptp_r32;
+    mul.lo.s32 %ptp_r33, %ptp_r33, 20;
+    add.u32 %ptp_r33, %ptp_r33, %ptp_r31;
+    mul.wide.s32 %ptp_rd153, %ptp_r33, 16;
+    add.s64 %ptp_rd154, %ptp_rd75, %ptp_rd153;
+    st.global.v2.u64 [%ptp_rd154], { %ptp_rd98, %ptp_rd97 };
+
+    mov.u64 %ptp_rd87, 0;
+    st.global.volatile.v2.u64 [%ptp_rd14], { %ptp_rd87, %ptp_rd87 };
+    st.global.volatile.v2.u64 [%ptp_rd15], { %ptp_rd87, %ptp_rd87 };
+    st.global.volatile.v2.u64 [%ptp_rd17], { %ptp_rd87, %ptp_rd87 };
+    st.global.volatile.v2.u64 [%ptp_rd22], { %ptp_rd87, %ptp_rd87 };
+
+$L__ptp_sync_local:
+    bar.sync 0;
+    add.s32 %ptp_r31, %ptp_r31, 1;
+    setp.lt.u32 %ptp_p16, %ptp_r31, 20;
+    @%ptp_p16 bra $L__ptp_sample_loop;
+
+    setp.ne.s32 %ptp_p17, %ptp_r3, 0;
+    @%ptp_p17 bra $L__ptp_after_gridbar;
+
+    ld.volatile.global.u32 %ptp_r13, [ptpGlobalBarrierSense];
+    mov.u64 %ptp_rd140, ptpGlobalBarrier;
+    atom.global.add.u32 %ptp_r26, [%ptp_rd140], 1;
+    setp.eq.s32 %ptp_p18, %ptp_r26, %ptp_r7;
+    @%ptp_p18 bra $L__ptp_barrier_release;
+    mov.u32 %ptp_r6, 0;
+    bra.uni $L__ptp_barrier_wait;
+
+$L__ptp_barrier_release:
+    mov.u32 %ptp_r28, 0;
+    st.volatile.global.u32 [ptpGlobalBarrier], %ptp_r28;
+    membar.gl;
+    mov.u64 %ptp_rd141, ptpGlobalBarrierSense;
+    atom.global.add.u32 %ptp_r29, [%ptp_rd141], 1;
+    bra.uni $L__ptp_after_gridbar;
+
+$L__ptp_barrier_wait:
+    ld.volatile.global.u32 %ptp_r27, [ptpGlobalBarrierSense];
+    // OLD: setp.eq.s32 %ptp_p19, %ptp_r27, %ptp_r13;
+    // OLD: @%ptp_p19 bra $L__ptp_barrier_wait;
+    setp.ne.s32 %ptp_p19, %ptp_r27, %ptp_r13;
+    @%ptp_p19 bra $L__ptp_after_gridbar;
+    add.u32 %ptp_r6, %ptp_r6, 1;
+    setp.lt.u32 %ptp_p22, %ptp_r6, 1048576;
+    @%ptp_p22 bra $L__ptp_barrier_wait;
+    bra.uni $L__ptp_after_gridbar;
+
+$L__ptp_after_gridbar:
+    bar.sync 0;
+    // OLD: add.s32 %ptp_r30, %ptp_r30, 1;
+    // OLD: setp.lt.u32 %ptp_p20, %ptp_r30, %ptp_r1;
+    // OLD: @%ptp_p20 bra $L__ptp_leader_loop;
+    // Step: root-clock calibration only runs leader rank 0; other pair offsets
+    // are derived from root-relative offsets in the send/receive hooks.
+    bra.uni $L__ptp_done;
+
+$L__ptp_done:
+    mov.u32 %ptp_r18, %laneid;
+    setp.ne.s32 %ptp_p8, %ptp_r18, 0;
+    @%ptp_p8 bra $L__ptp_done_exit;
+    // Step: one warp saves compact root-pair diagnostic scratch to ptp_metrics.
+    setp.ne.s32 %ptp_p8, %ptp_r2, 0;
+    @%ptp_p8 bra $L__ptp_done_exit;
+
+    shr.u32 %ptp_r18, %ptp_r3, 5;
+    setp.ne.s32 %ptp_p8, %ptp_r18, 0;
+    @%ptp_p8 bra $L__ptp_done_exit;
+    mov.u32 %ptp_r19, %ntid.x;
+    shr.u32 %ptp_r19, %ptp_r19, 5;
+    mad.lo.s32 %ptp_r20, %ptp_r2, %ptp_r19, %ptp_r18;
+    // OLD: mul.wide.s32 %ptp_rd77, %ptp_r20, 1024;
+    mul.wide.s32 %ptp_rd77, %ptp_r20, 17920;
+    add.s64 %ptp_rd77, %ptp_rd76, %ptp_rd77;
+    mov.u64 %ptp_rd78, %ptp_rd75;
+    mov.u32 %ptp_r21, 0;
+
+$L__ptp_save_loop:
+    ld.global.v2.u64 { %ptp_rd79, %ptp_rd80 }, [%ptp_rd78];
+    st.global.v2.u64 [%ptp_rd77], { %ptp_rd79, %ptp_rd80 };
+    add.s64 %ptp_rd78, %ptp_rd78, 16;
+    add.s64 %ptp_rd77, %ptp_rd77, 16;
+    add.s32 %ptp_r21, %ptp_r21, 1;
+    // OLD: setp.lt.u32 %ptp_p8, %ptp_r21, 20;
+    setp.lt.u32 %ptp_p8, %ptp_r21, 1120;
+    @%ptp_p8 bra $L__ptp_save_loop;
+
+$L__ptp_done_exit:
+}
+"""
+
+[probe.recv_latency]
+level = "thread"
+match.kind = "branch"
+match.predicated = true
+match.branch_target_is_previous_label = true
+match.nearby_before_ops = [ "ld.volatile.global.u64", "setp.lt.u64",]
+match.nearby_window = 5
+match.last = true
+inherit_predicate = false
+capture.recv_step = { from = "nearby_before", op = "setp.lt.u64", operand = 2, window = 5 }
+# OLD: capture.recv_step = { value = "0" }
+capture.recv_peer = { from = "self_incrementing_r_after", default = "%srlat_r3" }
+capture.vblock = { from = "virtual_block" }
+capture.chunk = { from = "single_self_incrementing_reg", default = "0" }
+after = """
+{
+    .reg .pred %srlat_p<7>;
+    .reg .b32 %srlat_r<7>;
+    .reg .b64 %srlat_rd<28>;
+    ld.const.u32 %srlat_r1, [deviceId];
+    ld.const.u32 %srlat_r2, [numDevices];
+    mov.u32 %srlat_r3, %srlat_r1;
+    setp.eq.u32 %srlat_p1, %srlat_r3, 0;
+    @%srlat_p1 mov.u32 %srlat_r3, %srlat_r2;
+    sub.u32 %srlat_r3, %srlat_r3, 1;
+    mov.u32 %srlat_r3, ${recv_peer};
+    setp.ge.u32 %srlat_p1, %srlat_r3, %srlat_r2;
+    @%srlat_p1 bra $L__srlat_done;
+    setp.eq.u32 %srlat_p2, %srlat_r3, %srlat_r1;
+    @%srlat_p2 bra $L__srlat_done;
+    mov.u32 %srlat_r4, ${vblock};
+    setp.ge.u32 %srlat_p3, %srlat_r4, 4096;
+    @%srlat_p3 bra $L__srlat_done;
+    mov.u64 %srlat_rd1, %globaltimer;
+    ld.const.u64 %srlat_rd2, [globalLatencyMailboxBuff];
+    cvta.to.global.u64 %srlat_rd2, %srlat_rd2;
+    mul.wide.u32 %srlat_rd3, %srlat_r1, 8;
+    add.s64 %srlat_rd4, %srlat_rd2, %srlat_rd3;
+    ld.global.u64 %srlat_rd5, [%srlat_rd4];
+    mul.wide.u32 %srlat_rd6, %srlat_r3, 4096;
+    cvt.u64.u32 %srlat_rd7, %srlat_r4;
+    add.s64 %srlat_rd8, %srlat_rd6, %srlat_rd7;
+    mul.lo.u64 %srlat_rd9, %srlat_rd8, 16;
+    add.s64 %srlat_rd10, %srlat_rd5, %srlat_rd9;
+    // OLD: shl.b64 %srlat_rd11, ${recv_step}, 24;
+    // Step: keep the FIFO step on a 32-bit boundary and reserve 24 bits for run id.
+    shl.b64 %srlat_rd11, ${recv_step}, 32;
+    ld.const.u32 %srlat_r5, [ptpRunId];
+    and.b32 %srlat_r5, %srlat_r5, 16777215;
+    cvt.u64.u32 %srlat_rd21, %srlat_r5;
+    shl.b64 %srlat_rd21, %srlat_rd21, 8;
+    or.b64 %srlat_rd11, %srlat_rd11, %srlat_rd21;
+    or.b64 %srlat_rd11, %srlat_rd11, 160;
+$L__srlat_wait_msg:
+    mov.u32 %srlat_r5, 0;
+$L__srlat_wait_msg_loop:
+    ld.global.volatile.v2.u64 { %srlat_rd12, %srlat_rd13 }, [%srlat_rd10];
+    // OLD: setp.ne.s64 %srlat_p3, %srlat_rd12, %srlat_rd11;
+    // OLD: @%srlat_p3 bra $L__srlat_wait_msg;
+    setp.eq.s64 %srlat_p4, %srlat_rd12, %srlat_rd11;
+    @%srlat_p4 bra $L__srlat_have_msg;
+    add.u32 %srlat_r5, %srlat_r5, 1;
+    setp.lt.u32 %srlat_p4, %srlat_r5, 1048576;
+    @%srlat_p4 bra $L__srlat_wait_msg_loop;
+    bra.uni $L__srlat_done;
+$L__srlat_have_msg:
+    // Step: tag-only hits mean the timestamp field was cleared or not visible.
+    setp.eq.u64 %srlat_p5, %srlat_rd13, 0;
+    // Step: hits with at most one poll miss likely arrived before this hook started.
+    setp.le.u32 %srlat_p6, %srlat_r5, 1;
+    or.pred %srlat_p5, %srlat_p5, %srlat_p6;
+    // OLD: invalid records used to save INT64_MAX and lose the raw latency value.
+    // OLD: mov.u64 %srlat_rd17, 9223372036854775807;
+    // Step: root-relative offset slot 0 converts root timestamps to this receiver clock.
+    // OLD: ld.const.u64 %srlat_rd14, [globalResultBuff];
+    ld.const.u64 %srlat_rd14, [globalLatencyOffsetBuff];
+    cvta.to.global.u64 %srlat_rd14, %srlat_rd14;
+    // OLD: mul.wide.u32 %srlat_rd22, %srlat_r3, 8;
+    // OLD: add.s64 %srlat_rd23, %srlat_rd14, %srlat_rd22;
+    // Step: sender publishes root-clock timestamps; slot 0 converts root time
+    // into this receiver's local clock.
+    mov.u64 %srlat_rd23, %srlat_rd14;
+    // OLD: ld.global.u64 %srlat_rd15, [%srlat_rd14];
+    ld.global.u64 %srlat_rd15, [%srlat_rd23];
+    add.s64 %srlat_rd16, %srlat_rd13, %srlat_rd15;
+    sub.s64 %srlat_rd17, %srlat_rd1, %srlat_rd16;
+    // OLD: skip mismatched cross-clock artifacts while retaining small signed jitter.
+    // OLD: setp.gt.s64 %srlat_p5, %srlat_rd17, 1000000000;
+    // OLD: @%srlat_p5 bra $L__srlat_done;
+    mov.u64 %srlat_rd18, 0;
+    st.global.volatile.v2.u64 [%srlat_rd10], { %srlat_rd18, %srlat_rd18 };
+    fence.sc.sys;
+    add.u32 %srlat_r6, %srlat_r3, 1;
+    shl.b32 %srlat_r6, %srlat_r6, 16;
+    or.b32 %srlat_r6, %srlat_r6, %srlat_r4;
+    // Step: bit 31 marks invalid while preserving the signed latency value.
+    @%srlat_p5 or.b32 %srlat_r6, %srlat_r6, 2147483648;
+    cvt.u64.u32 %srlat_rd19, %srlat_r6;
+    mov.u64 %srlat_rd20, ${recv_step};
+    SAVE [ sr_latency ] { %srlat_rd17, %srlat_rd19, %srlat_rd20 };
+    cvt.u64.u32 %srlat_rd24, %srlat_r5;
+    shl.b64 %srlat_rd24, %srlat_rd24, 32;
+    or.b64 %srlat_rd24, %srlat_rd24, %srlat_rd19;
+    SAVE [ sr_latency_debug ] { %srlat_rd17, %srlat_rd24, %srlat_rd20, %srlat_rd12, %srlat_rd13, %srlat_rd15, %srlat_rd16, %srlat_rd1 };
+$L__srlat_done:
+}
+"""
+
+[probe.send_timestamp_message]
+level = "thread"
+match.op = "st.volatile.global.u64"
+match.before_ref = "recv_latency"
+match.last = true
+capture.send_step = { operand = 1 }
+# OLD: capture.send_step = { value = "0" }
+capture.send_peer = { from = "self_incrementing_r_after", default = "%srmsg_r3" }
+capture.send_peer_mod = { from = "nearby_before", op = "rem.s32", operand = 0, window = 384, default = "4294967295" }
+after = """
+{
+    .reg .pred %srmsg_p<5>;
+    .reg .b32 %srmsg_r<8>;
+    .reg .b64 %srmsg_rd<18>;
+    ld.const.u32 %srmsg_r1, [deviceId];
+    ld.const.u32 %srmsg_r2, [numDevices];
+    add.u32 %srmsg_r3, %srmsg_r1, 1;
+    setp.ge.u32 %srmsg_p1, %srmsg_r3, %srmsg_r2;
+    @%srmsg_p1 sub.u32 %srmsg_r3, %srmsg_r3, %srmsg_r2;
+    mov.u32 %srmsg_r4, ${send_peer_mod};
+    setp.eq.u32 %srmsg_p2, %srmsg_r4, 4294967295;
+    @%srmsg_p2 mov.u32 %srmsg_r4, ${send_peer};
+    mov.u32 %srmsg_r3, %srmsg_r4;
+    setp.ge.u32 %srmsg_p3, %srmsg_r3, %srmsg_r2;
+    @%srmsg_p3 bra $L__srmsg_done;
+    setp.eq.u32 %srmsg_p4, %srmsg_r3, %srmsg_r1;
+    @%srmsg_p4 bra $L__srmsg_done;
+    mov.u32 %srmsg_r5, ${vblock};
+    setp.ge.u32 %srmsg_p3, %srmsg_r5, 4096;
+    @%srmsg_p3 bra $L__srmsg_done;
+    ld.const.u64 %srmsg_rd1, [globalLatencyMailboxBuff];
+    cvta.to.global.u64 %srmsg_rd1, %srmsg_rd1;
+    mul.wide.u32 %srmsg_rd2, %srmsg_r3, 8;
+    add.s64 %srmsg_rd3, %srmsg_rd1, %srmsg_rd2;
+    ld.global.u64 %srmsg_rd4, [%srmsg_rd3];
+    mov.u64 %srmsg_rd5, %globaltimer;
+    ld.const.u64 %srmsg_rd14, [globalLatencyOffsetBuff];
+    cvta.to.global.u64 %srmsg_rd14, %srmsg_rd14;
+    ld.global.u64 %srmsg_rd15, [%srmsg_rd14];
+    // Step: convert local send timestamp to rank-0 root clock before publish.
+    sub.s64 %srmsg_rd5, %srmsg_rd5, %srmsg_rd15;
+    mul.wide.u32 %srmsg_rd6, %srmsg_r1, 4096;
+    cvt.u64.u32 %srmsg_rd7, %srmsg_r5;
+    add.s64 %srmsg_rd8, %srmsg_rd6, %srmsg_rd7;
+    mul.lo.u64 %srmsg_rd9, %srmsg_rd8, 16;
+    add.s64 %srmsg_rd10, %srmsg_rd4, %srmsg_rd9;
+    // OLD: shl.b64 %srmsg_rd11, ${send_step}, 24;
+    // Step: mirror the receive tag layout: high 32 bits are FIFO step.
+    shl.b64 %srmsg_rd11, ${send_step}, 32;
+    ld.const.u32 %srmsg_r6, [ptpRunId];
+    and.b32 %srmsg_r6, %srmsg_r6, 16777215;
+    cvt.u64.u32 %srmsg_rd12, %srmsg_r6;
+    shl.b64 %srmsg_rd12, %srmsg_rd12, 8;
+    or.b64 %srmsg_rd11, %srmsg_rd11, %srmsg_rd12;
+    or.b64 %srmsg_rd11, %srmsg_rd11, 160;
+    add.s64 %srmsg_rd13, %srmsg_rd10, 8;
+    st.global.volatile.u64 [%srmsg_rd13], %srmsg_rd5;
+    fence.sc.sys;
+    st.global.volatile.u64 [%srmsg_rd10], %srmsg_rd11;
+    fence.sc.sys;
+$L__srmsg_done:
+}
+"""
+
+[symbol]
+hostId = "u32"
+deviceId = "u32"
+numDevices = "u32"
+globalFollowerBuff = "u64"
+globalLeaderBuff = "u64"
+globalLatencyMailboxBuff = "u64"
+globalLatencyOffsetBuff = "u64"
+globalResultBuff = "u64"
+ptpRunId = "u32"
+ptpGlobalBarrier = { dtype = "u32", storage = "global" }
+ptpGlobalBarrierSense = { dtype = "u32", storage = "global" }
+
+[map.ptp_metrics]
+level = "warp"
+type = "array"
+size = 16
+cap = 1120
+
+[map.ptp_metrics.regs]
+offset = [ "u64", "None",]
+latency = [ "u64", "None",]
+
+[map.sr_latency]
+level = "warp"
+type = "array"
+size = 16
+cap = 128
+
+[map.sr_latency.regs]
+latency = [ "u64", "None",]
+vblock = [ "u32", "None",]
+step = [ "u32", "None",]
+
+[map.sr_latency_debug]
+level = "warp"
+type = "array"
+size = 64
+cap = 128
+
+[map.sr_latency_debug.regs]
+latency = [ "u64", "None",]
+meta = [ "u64", "None",]
+step = [ "u64", "None",]
+tag = [ "u64", "None",]
+sender_time = [ "u64", "None",]
+offset = [ "u64", "None",]
+corrected_sender_time = [ "u64", "None",]
+local_time = [ "u64", "None",]

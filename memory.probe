@@ -1,0 +1,69 @@
+regs = 3
+
+[probe.fabricperf_mem_init]
+level = "thread"
+pos = "kernel"
+before = """
+// Stage: initialize per-thread byte counters for one-kernel metrics.
+mov.u64 %NR0, 0;
+mov.u64 %NR1, 0;
+mov.u64 %NR2, 0;
+"""
+
+[probe.fabricperf_mem_load]
+level = "thread"
+pos = "ld.global:ld.volatile.global"
+after = """
+// Stage: record bytes loaded by this thread at the per-instruction event.
+add.u64 %NR0, %NR0, BYTES;
+"""
+
+[probe.fabricperf_mem_store]
+level = "thread"
+pos = "st.global:st.volatile.global"
+after = """
+// Stage: record bytes stored by this thread at the per-instruction event.
+add.u64 %NR1, %NR1, BYTES;
+"""
+
+[probe.fabricperf_mem_async]
+level = "thread"
+pos = "cp.async.ca:cp.async.cg"
+after = """
+// Stage: record bytes moved by async copy ops for this thread.
+add.u64 %NR2, %NR2, BYTES;
+"""
+
+[probe.fabricperf_mem_save]
+level = "thread"
+pos = "kernel"
+after = """
+// Stage: lead/follow map emission point for per-launch byte totals.
+{
+    // Step 1: declare scratch registers used in this finalization pass.
+    .reg .b32 %fpmem_r<2>;
+    .reg .b64 %fpmem_rd<2>;
+
+    // Step 2: load launch index from symbol and promote to u64 for storage.
+    ld.const.u32 %fpmem_r1, [launchIndex];
+    cvt.u64.u32 %fpmem_rd1, %fpmem_r1;
+
+    // Step 3: persist thread counters and launch index to map record.
+    SAVE [ fabricperf_probe_bytes ] { %NR0, %NR1, %NR2, %fpmem_rd1 };
+}
+"""
+
+[symbol]
+launchIndex = "u32"
+
+[map.fabricperf_probe_bytes]
+level = "thread"
+type = "array"
+size = 32
+cap = 1
+
+[map.fabricperf_probe_bytes.regs]
+ld_global_bytes = [ "u64", "None",]
+st_global_bytes = [ "u64", "None",]
+cp_async_bytes = [ "u64", "None",]
+launch_index = [ "u64", "None",]

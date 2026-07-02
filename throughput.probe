@@ -1,0 +1,127 @@
+# Canonical throughput probe: direct GMEM arrival logging with four workgroup slices.
+regs = 3
+
+[probe.fabricperf_throughput_init]
+level = "thread"
+pos = "kernel"
+before = """
+// Stage: initialize per-thread timing state. Example: one workgroup leader uses
+// %NR1 as its private total-arrival counter for this CTA launch.
+{
+    mov.u64 %NR0, %globaltimer;
+    mov.u64 %NR1, 0;
+    mov.u64 %NR2, 0;
+}
+"""
+
+[probe.fabricperf_throughput_recv]
+level = "thread"
+# OLD: the NCCL wrapper hook was disabled because ncclDevKernel_SendRecv hides
+# the receive loop inside a device function that Neutrino does not rewrite yet.
+match.kind = "branch"
+match.predicated = true
+match.branch_target_is_previous_label = true
+match.nearby_before_ops = [ "ld.volatile.global.u64", "setp.lt.u64",]
+match.nearby_window = 5
+match.last = true
+inherit_predicate = false
+capture.recv_step = { from = "nearby_before", op = "setp.lt.u64", operand = 2, window = 5 }
+capture.recv_peer = { from = "self_incrementing_r_after", default = "%fpthr_unused_peer" }
+capture.group = { from = "group_register", default = "0" }
+capture.group_source = { from = "group_thread_source", default = "%tid.x" }
+capture.group_threads = { from = "group_thread_count", default = "%ntid.x" }
+capture.vblock = { from = "virtual_block" }
+capture.chunk = { from = "single_self_incrementing_reg", default = "0" }
+after = """
+// Stage: the workgroup leader records one arrival delta into its fixed GMEM slice.
+{
+    .reg .pred %fpthr_recv_p<4>;
+    .reg .b32 %fpthr_recv_r<32>;
+    .reg .b64 %fpthr_recv_rd<10>;
+
+    // Step: keep only the deterministic leader for the captured workgroup.
+    mov.u32 %fpthr_recv_r28, ${group};
+    mov.u32 %fpthr_recv_r29, ${group_threads};
+    mov.u32 %fpthr_recv_r30, ${group_source};
+    mul.lo.u32 %fpthr_recv_r1, %fpthr_recv_r28, %fpthr_recv_r29;
+    setp.ne.u32 %fpthr_recv_p1, %fpthr_recv_r30, %fpthr_recv_r1;
+    @%fpthr_recv_p1 bra $L__fpthr_recv_done;
+
+    // Step: clamp the hard-coded workgroup id into the four-slice layout.
+    mov.u32 %fpthr_recv_r2, %fpthr_recv_r28;
+    setp.ge.u32 %fpthr_recv_p2, %fpthr_recv_r2, 4;
+    @%fpthr_recv_p2 mov.u32 %fpthr_recv_r2, 3;
+    cvt.u64.u32 %NR2, %fpthr_recv_r2;
+
+    // Step: write at most 1022 deltas; %NR1 still counts all arrivals.
+    setp.lt.u64 %fpthr_recv_p3, %NR1, 1022;
+    cvt.u32.u64 %fpthr_recv_r3, %NR1;
+    mov.u64 %fpthr_recv_rd1, %globaltimer;
+    sub.u64 %fpthr_recv_rd2, %fpthr_recv_rd1, %NR0;
+    cvt.u32.u64 %fpthr_recv_r4, %fpthr_recv_rd2;
+
+    // Step: reuse Neutrino's generated first-warp map address for this CTA.
+    // OLD: manual block_base recomputation loaded __neutrino_map_ptr_0 directly.
+    mov.u64 %fpthr_recv_rd5, %map_fabricperf_throughput1;
+
+    // Step: compute wg_base + (2 + sequence) * sizeof(u32).
+    mul.wide.u32 %fpthr_recv_rd6, %fpthr_recv_r2, 4096;
+    add.s64 %fpthr_recv_rd7, %fpthr_recv_rd5, %fpthr_recv_rd6;
+    add.u32 %fpthr_recv_r14, %fpthr_recv_r3, 2;
+    mul.wide.u32 %fpthr_recv_rd8, %fpthr_recv_r14, 4;
+    add.s64 %fpthr_recv_rd9, %fpthr_recv_rd7, %fpthr_recv_rd8;
+    @%fpthr_recv_p3 st.global.u32 [%fpthr_recv_rd9], %fpthr_recv_r4;
+    add.u64 %NR1, %NR1, 1;
+
+$L__fpthr_recv_done:
+}
+"""
+
+[probe.fabricperf_throughput_flush]
+level = "thread"
+match.op = "ret"
+match.last = true
+inherit_predicate = false
+before = """
+// Stage: workgroup leaders publish duration and exact total-arrival headers.
+{
+    .reg .pred %fpthr_flush_p<3>;
+    .reg .b32 %fpthr_flush_r<4>;
+    .reg .b64 %fpthr_flush_rd<9>;
+
+    // Step: skip threads that never observed a receive arrival.
+    setp.eq.u64 %fpthr_flush_p1, %NR1, 0;
+    @%fpthr_flush_p1 bra $L__fpthr_flush_done;
+    cvt.u32.u64 %fpthr_flush_r1, %NR1;
+    cvt.u32.u64 %fpthr_flush_r2, %NR2;
+    setp.ge.u32 %fpthr_flush_p2, %fpthr_flush_r2, 4;
+    @%fpthr_flush_p2 bra $L__fpthr_flush_done;
+    mov.u64 %fpthr_flush_rd1, %globaltimer;
+    sub.u64 %fpthr_flush_rd2, %fpthr_flush_rd1, %NR0;
+    cvt.u32.u64 %fpthr_flush_r3, %fpthr_flush_rd2;
+
+    // Step: cell 0 is duration; cell 1 is total arrivals.
+    mov.u64 %fpthr_flush_rd5, %map_fabricperf_throughput1;
+    mul.wide.u32 %fpthr_flush_rd6, %fpthr_flush_r2, 4096;
+    add.s64 %fpthr_flush_rd7, %fpthr_flush_rd5, %fpthr_flush_rd6;
+    st.global.u32 [%fpthr_flush_rd7], %fpthr_flush_r3;
+    add.s64 %fpthr_flush_rd8, %fpthr_flush_rd7, 4;
+    st.global.u32 [%fpthr_flush_rd8], %fpthr_flush_r1;
+
+$L__fpthr_flush_done:
+}
+"""
+
+[symbol]
+fabricperfThroughputSlots = "u32"
+fabricperfThroughputBinNs = "u32"
+fabricperfThroughputPartitions = "u32"
+
+[map.fabricperf_throughput]
+level = "warp"
+type = "array"
+size = 4
+cap = 4096
+
+[map.fabricperf_throughput.regs]
+value = [ "u32", "None",]
